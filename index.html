@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="BOM Scanner">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Mouser BOM Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/zxing-wasm@2.1.0/dist/iife/reader/index.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --bag: #c7ccd1;          /* ESD bag silver */
+  --label: #ffffff;        /* Mouser label paper */
+  --ink: #1c2024;
+  --ink-soft: #5a636c;
+  --rule: #d9dde1;
+  --keep: #1e9e4a;
+  --same: #f2c230;
+  --check: #f08a24;
+  --nope: #d33b32;
+  --idle: #3a4148;
+  --btn: #1c2024;
+  --btn-ink: #ffffff;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bag: #1f2327;
+    --label: #2b3036;
+    --ink: #eceef0;
+    --ink-soft: #a3abb3;
+    --rule: #3a4148;
+    --idle: #3a4148;
+    --btn: #eceef0;
+    --btn-ink: #1c2024;
+  }
+}
+*, *::before, *::after { box-sizing: inherit; }
+html, body { margin: 0; }
+body {
+  background: var(--bag);
+  color: var(--ink);
+  font-family: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 17px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+}
+.wrap { max-width: 720px; margin: 0 auto; padding: 12px 12px 40px; }
+
+.top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 6px 4px 12px; }
+.top h1 { font-size: 1.2rem; margin: 0; letter-spacing: -0.01em; }
+.count { font-size: 1.05rem; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.count b { color: var(--ink); font-size: 1.4rem; }
+
+.sheet { background: var(--label); border-radius: 6px; padding: 14px; margin-bottom: 12px; }
+.sheet p { margin: 0 0 10px; }
+.muted { color: var(--ink-soft); font-size: 0.92rem; }
+
+button, .btn {
+  font: inherit; font-weight: 700; font-size: 1rem;
+  border: 2px solid var(--btn); border-radius: 6px;
+  background: var(--btn); color: var(--btn-ink);
+  padding: 10px 16px; min-height: 46px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+button.ghost, .btn.ghost { background: transparent; color: var(--ink); }
+button:focus-visible, .btn:focus-visible, select:focus-visible { outline: 3px solid var(--check); outline-offset: 2px; }
+select { font: inherit; font-size: 0.95rem; min-height: 46px; border-radius: 6px; border: 2px solid var(--rule); background: var(--label); color: var(--ink); padding: 0 10px; max-width: 100%; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
+/* the status strip is the one loud element */
+.stage { position: relative; background: #000; border-radius: 6px; overflow: hidden; margin-bottom: 10px; min-height: 140px; }
+.stage video { display: block; width: 100%; height: auto; }
+.stage canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+.strip {
+  background: var(--idle); color: #fff;
+  padding: 14px 16px 16px; min-height: 112px;
+  border-bottom: 6px solid rgba(0,0,0,0.25);
+}
+.strip .verdict { font-size: 1.15rem; font-weight: 700; }
+.strip .refs { font-size: 2.1rem; font-weight: 700; line-height: 1.1; margin: 2px 0 4px; word-break: break-word; }
+.strip .detail { font-size: 0.95rem; opacity: 0.92; word-break: break-word; }
+.strip.keep  { background: var(--keep); color: #fff; }
+.strip.same  { background: var(--same); color: #1c2024; }
+.strip.check { background: var(--check); color: #1c2024; }
+.strip.nope  { background: var(--nope); color: #fff; }
+.strip.flash { animation: flash 0.35s ease-out; }
+@keyframes flash { from { filter: brightness(1.35); } to { filter: none; } }
+@media (prefers-reduced-motion: reduce) { .strip.flash { animation: none; } }
+.hint { padding: 10px 2px 0; }
+
+.listhead { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 8px; }
+.listhead h2 { font-size: 1.05rem; margin: 0; }
+.toggle { display: inline-flex; gap: 8px; align-items: center; font-size: 0.95rem; }
+.toggle input { width: 20px; height: 20px; }
+ul.parts { list-style: none; margin: 0; padding: 0; }
+ul.parts li {
+  display: grid; grid-template-columns: 14px 1fr auto; gap: 4px 12px; align-items: start;
+  padding: 10px 4px; border-top: 1px solid var(--rule); cursor: pointer;
+}
+ul.parts li:first-child { border-top: 0; }
+.dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--ink-soft); margin-top: 5px; }
+li.f-MPN .dot { background: var(--keep); border-color: var(--keep); }
+li.f-VALUE .dot { background: var(--same); border-color: var(--same); }
+li.f-MANUAL .dot { background: var(--ink-soft); }
+li.done .refs { text-decoration: line-through; text-decoration-thickness: 2px; color: var(--ink-soft); }
+.p-refs { font-weight: 700; }
+.p-sub { font-size: 0.88rem; color: var(--ink-soft); word-break: break-all; }
+.p-qty { font-variant-numeric: tabular-nums; font-weight: 700; text-align: right; }
+.err { color: var(--nope); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Mouser BOM scanner</h1>
+    <div class="count" id="count" aria-live="polite"></div>
+  </header>
+
+  <section class="sheet" id="bomSheet">
+    <p id="bomInfo">Φόρτωσε το BOM της πλακέτας (.xlsx ή .csv) για να ξεκινήσεις.</p>
+    <div class="row">
+      <label class="btn" for="bomFile" id="bomBtn">Φόρτωση BOM</label>
+      <input type="file" id="bomFile" accept=".xlsx,.csv,.tsv,.txt">
+    </div>
+    <p class="err" id="bomErr" hidden></p>
+  </section>
+
+  <section id="scanner" hidden>
+    <div class="stage">
+      <div class="strip" id="strip">
+        <div class="verdict" id="sVerdict">Η κάμερα είναι κλειστή</div>
+        <div class="refs" id="sRefs"></div>
+        <div class="detail" id="sDetail">Πάτα «Άνοιγμα κάμερας» και δείξε την ετικέτα του σακουλακιού.</div>
+      </div>
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="row">
+      <button id="camBtn">Άνοιγμα κάμερας</button>
+      <select id="camSel" hidden aria-label="Κάμερα"></select>
+    </div>
+    <p class="muted hint">Κράτα την ετικέτα 15–25 εκ. από την κάμερα, με καλό φως. Αρκεί να φαίνεται καθαρά το τετράγωνο barcode.</p>
+  </section>
+
+  <section class="sheet" id="listSheet" hidden>
+    <div class="listhead">
+      <h2>Εξαρτήματα</h2>
+      <label class="toggle"><input type="checkbox" id="onlyMissing"> Μόνο όσα λείπουν</label>
+    </div>
+    <ul class="parts" id="parts"></ul>
+    <p class="muted">Πάτα σε μια γραμμή για να τη σημειώσεις με το χέρι ως βρέθηκε ή όχι.</p>
+    <div class="row">
+      <button class="ghost" id="dlBtn">Λήψη report</button>
+      <button class="ghost" id="resetBtn">Μηδενισμός προόδου</button>
+      <label class="toggle"><input type="checkbox" id="valueMode" checked> Match και με τιμή</label>
+    </div>
+  </section>
+</div>
+
+<script>
+// LOGIC-START
+const GS = "\x1d", RS = "\x1e", EOT = "\x04";
+const MOUSER_PREFIX = /^\d{2,4}-/;
+const COLUMN_CANDIDATES = {
+  mpn: ["mpn", "manufacturer part number", "manufacturer_part_number", "mfr. #", "mfr #", "mfr part number",
+        "mfr. part number", "mfr_pn", "mfg part number", "manufacturer pn", "part number", "partnumber"],
+  mouser: ["mouser #", "mouser part number", "mouser part #", "mouser pn", "mouser_pn", "mouser", "mouser no",
+           "supplier part number"],
+  ref: ["reference", "references", "designator", "designators", "ref", "refs", "ref des"],
+  qty: ["qty", "quantity", "qty.", "quantity per pcb", "count"],
+  value: ["value", "description", "desc."],
+};
+const norm = v => { const s = (v ?? "").toString().trim(); return /^(nan|none)?$/i.test(s) ? "" : s.replace(/\s+/g, "").toUpperCase(); };
+const clean = v => { const s = (v ?? "").toString().trim(); return /^(nan|none)$/i.test(s) ? "" : s; };
+
+const TOL = { A: 0.05, B: 0.1, C: 0.25, D: 0.5, F: 1, G: 2, J: 5, K: 10, M: 20, Z: 80 };
+const EIA_V = { "0G": 4, "0J": 6.3, "1A": 10, "1C": 16, "1E": 25, "YA": 35, "1V": 35, "1H": 50, "2A": 100, "2D": 200, "2E": 250, "2W": 450, "2J": 630 };
+const METRIC = { "0402": "01005", "0603": "0201", "1005": "0402", "1608": "0603", "2012": "0805", "3216": "1206", "3225": "1210", "4532": "1812", "5025": "2010", "6332": "2512" };
+const PANA_SIZE = { "1": "0201", "2": "0402", "3": "0603", "6": "0805", "8": "1206", "14": "1210", "12": "1812" };
+const KOA_SIZE = { "1H": "0201", "1E": "0402", "1J": "0603", "2A": "0805", "2B": "1206" };
+const MURATA_SIZE = { "03": "0201", "15": "0402", "18": "0603", "21": "0805", "31": "1206", "32": "1210", "43": "1812", "55": "2220" };
+const MURATA_DIEL = { R7: "X7R", R6: "X5R", "5C": "C0G", C7: "X7S", C8: "X6S", D7: "X7T", Z7: "X7R", E7: "X7U", L8: "X8L" };
+const SAMSUNG_SIZE = { "03": "0201", "05": "0402", "10": "0603", "21": "0805", "31": "1206", "32": "1210" };
+const SAMSUNG_DIEL = { A: "X5R", B: "X7R", C: "C0G", F: "Y5V", X: "X6S", Z: "X7S" };
+const SAMSUNG_V = { R: 4, Q: 6.3, P: 10, O: 16, A: 25, L: 35, B: 50, C: 100, D: 200 };
+const CGA_SIZE = { "1": "0201", "2": "0402", "3": "0603", "4": "0805", "5": "1206", "6": "1210" };
+const KEMET_V = { "9": 6.3, "8": 10, "4": 16, "3": 25, "6": 35, "5": 50, "1": 100, "2": 200, A: 250 };
+const KEMET_DIEL = { R: "X7R", G: "C0G", P: "X5R" };
+
+function rCode(s) {
+  s = s.toUpperCase();
+  const m = /^(\d*)([RKM])(\d*)$/.exec(s);
+  if (m) return parseFloat(`${m[1] || 0}.${m[3] || 0}`) * { R: 1, K: 1e3, M: 1e6 }[m[2]];
+  if (/^\d{3,4}$/.test(s)) return parseInt(s.slice(0, -1), 10) * 10 ** parseInt(s.slice(-1), 10);
+  return null;
+}
+function cCode(s) {
+  if (s.includes("R")) return parseFloat(s.replace("R", ".")) * 1e-12;
+  return parseInt(s.slice(0, 2), 10) * 10 ** parseInt(s[2], 10) * 1e-12;
+}
+function spec(kind, value, size = null, tol = null, volt = null, diel = null) {
+  if (value == null || Number.isNaN(value)) return null;
+  return { kind, value, size: size ?? null, tol: tol ?? null, volt: volt ?? null, diel: diel ?? null };
+}
+const _r = (size, tol, code) => spec("R", rCode(code), size, TOL[tol]);
+const _c = (size, code, tol, volt, diel) => spec("C", cCode(code), size, "FGJKMZ".includes(tol) ? TOL[tol] : null, volt, diel);
+
+const DECODERS = [
+  [/^(?:RC|RT|AC|AT|AF)(\d{4})([A-Z])[A-Z]{1,2}-?(?:07|10|13)(\d+[RKM]\d*)L$/, m => _r(m[1], m[2], m[3])],            // Yageo
+  [/^ERJ-?(\d{1,2})([A-Z]{1,4})([0-9R]{3,4})[XVYZ]$/,
+    m => _r(m[1] === "1" && m[2].startsWith("T") ? "2512" : PANA_SIZE[m[1]], m[2].slice(-1), m[3])],               // Panasonic
+  [/^(?:TNPW|CRCW|RCS|RCG|RCA|TNPU)(\d{4})(\d+[RKM]\d*)([A-Z])/, m => _r(m[1], m[3], m[2])],                        // Vishay
+  [/^(?:RMCF|RNCP|RMCP|RNCS)(\d{4})([A-Z])[A-Z](\d+[RKM]\d*)$/, m => _r(m[1], m[2], m[3])],                         // Stackpole
+  [/^CR(\d{4})-([A-Z])[A-Z]-([0-9R]{3,4})[A-Z]{0,3}$/, m => _r(m[1], m[2], m[3])],                                  // Bourns
+  [/^RC(0603|1005|1608|2012|3216)([A-Z])([0-9R]{3,4})CS$/, m => _r(METRIC[m[1]], m[2], m[3])],                      // Samsung R
+  [/^RK73[HB](1H|1E|1J|2A|2B)T\w{1,3}?([0-9R]{3,4})([A-Z])$/, m => _r(KOA_SIZE[m[1]], m[3], m[2])],                 // KOA
+  [/^(?:GRM|GCM|GCJ|GRT|GJM|GCQ|GQM|GCG|GRJ)(\d{2})\w([A-Z0-9]{2})([0-9A-Z]{2})([0-9R]{3})([A-Z])/,
+    m => _c(MURATA_SIZE[m[1]], m[4], m[5], EIA_V[m[3]], MURATA_DIEL[m[2]] ?? m[2])],                                // Murata
+  [/^CL(\d{2})([A-Z])([0-9R]{3})([A-Z])([A-Z])/, m => _c(SAMSUNG_SIZE[m[1]], m[3], m[4], SAMSUNG_V[m[5]], SAMSUNG_DIEL[m[2]])], // Samsung C
+  [/^C(0603|1005|1608|2012|3216|3225|4532)([A-Z]\d[A-Z])(\d[A-Z])([0-9R]{3})([A-Z])/, m => _c(METRIC[m[1]], m[4], m[5], EIA_V[m[3]], m[2])], // TDK
+  [/^CGA(\d)[A-Z]\d([A-Z]\d[A-Z])(\d[A-Z])([0-9R]{3})([A-Z])/, m => _c(CGA_SIZE[m[1]], m[4], m[5], EIA_V[m[3]], m[2])],    // TDK CGA
+  [/^C(0201|0402|0603|0805|1206|1210)C([0-9R]{3})([A-Z])([0-9A])([A-Z])/, m => _c(m[1], m[2], m[3], KEMET_V[m[4]], KEMET_DIEL[m[5]])], // KEMET
+];
+
+function decodeMpn(mpn) {
+  let s = norm(mpn);
+  if (MOUSER_PREFIX.test(s)) s = s.split(/-(.*)/s)[1];
+  for (const [re, fn] of DECODERS) {
+    const m = re.exec(s);
+    if (m) { try { return fn(m); } catch { return null; } }
+  }
+  return null;
+}
+
+function parseValueText(txt, ref) {
+  let t = clean(txt); const r = clean(ref).toUpperCase();
+  const kind = /^R\d/.test(r) ? "R" : /^C\d/.test(r) ? "C" : null;
+  if (!t || !kind) return null;
+  t = t.replace(/Ω/g, "R").replace(/[µμ]/g, "u").replace(/\s*ohms?\b/gi, "R");
+  if (kind === "C") {
+    const m = /(\d+)(?:[.,](\d+))?\s*([pnu])(\d*)\s*F?/i.exec(t);
+    if (!m) return null;
+    const v = parseFloat(`${m[1]}.${m[2] || m[4] || 0}`) * { p: 1e-12, n: 1e-9, u: 1e-6 }[m[3].toLowerCase()];
+    const mv = /(\d+(?:[.,]\d+)?)\s*V\b/i.exec(t);
+    return spec("C", v, null, null, mv ? parseFloat(mv[1].replace(",", ".")) : null);
+  }
+  const m = /(\d+)(?:[.,](\d+))?\s*([RKM])(\d*)(?![A-Z])/i.exec(t);
+  if (m) return spec("R", parseFloat(`${m[1]}.${m[2] || m[4] || 0}`) * { R: 1, K: 1e3, M: 1e6 }[m[3].toUpperCase()]);
+  if (/^\d+(?:[.,]\d+)?$/.test(t)) return spec("R", parseFloat(t.replace(",", ".")));
+  return null;
+}
+
+const g4 = v => String(Number(v.toPrecision(4)));
+function fmtValue(s) {
+  const v = s.value; let out;
+  if (s.kind === "R") out = v >= 1e6 ? g4(v / 1e6) + "M" : v >= 1e3 ? g4(v / 1e3) + "k" : g4(v) + "R";
+  else out = v >= 0.999e-6 ? g4(v / 1e-6) + "µF" : v >= 0.999e-9 ? g4(v / 1e-9) + "nF" : g4(v / 1e-12) + "pF";
+  const extra = [s.size, s.volt ? `${s.volt}V` : null, s.diel, s.tol ? `${s.tol}%` : null].filter(Boolean);
+  return out + (extra.length ? " " + extra.join(" ") : "");
+}
+
+function compare(scan, bom) {
+  if (!scan || !bom || scan.kind !== bom.kind) return null;
+  const a = scan.value, b = bom.value;
+  if (Math.abs(a - b) > 0.005 * Math.max(a, b, 1e-15)) return null;
+  if (scan.size && bom.size && scan.size !== bom.size) return null;
+  if (scan.volt && bom.volt && scan.volt < bom.volt) return ["reject", [`${scan.volt}V < BOM ${bom.volt}V`]];
+  const notes = [];
+  if (!(scan.size && bom.size)) notes.push("έλεγξε package");
+  if (bom.kind === "C" && bom.volt && !scan.volt) notes.push("έλεγξε τάση");
+  if (scan.tol && bom.tol && scan.tol > bom.tol) notes.push(`ανοχή ${scan.tol}% > BOM ${bom.tol}%`);
+  if (scan.diel && bom.diel && scan.diel !== bom.diel) notes.push(`${scan.diel} αντί ${bom.diel}`);
+  return [notes.length ? "warn" : "ok", notes];
+}
+
+// ---- BOM
+const cellStr = v => v == null ? "" : String(v).trim();
+function loadBom(rows) {
+  const known = new Set(Object.values(COLUMN_CANDIDATES).flat());
+  let hdr = rows.findIndex(r => r.some(c => known.has(String(c).trim().toLowerCase())));
+  if (hdr < 0) hdr = Math.max(0, rows.findIndex(r => r.some(c => String(c).trim())));
+  const header = (rows[hdr] || []).map(cellStr);
+  const headers = {};
+  header.forEach((h, j) => { if (h) headers[h.toLowerCase()] ??= j; });
+  const cols = {};
+  for (const [key, cands] of Object.entries(COLUMN_CANDIDATES)) {
+    const c = cands.find(c => c in headers);
+    cols[key] = c === undefined ? null : headers[c];
+  }
+  if (cols.mpn == null && cols.mouser == null)
+    throw new Error(`Δεν βρέθηκε στήλη MPN ή Mouser # στο BOM. Στήλες: ${header.filter(Boolean).join(", ")}. Μετονόμασε τη στήλη με τα part numbers σε «MPN».`);
+  const lines = [];
+  for (let i = hdr + 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const get = k => cols[k] != null ? cellStr(r[cols[k]]) : "";
+    const mpn = norm(get("mpn")), mouser = norm(get("mouser"));
+    const sp = decodeMpn(mpn) || decodeMpn(mouser) || parseValueText(get("value"), get("ref"));
+    if (!mpn && !mouser && !sp) continue;
+    const keys = new Set([mpn, mouser]);
+    if (MOUSER_PREFIX.test(mouser)) keys.add(mouser.split(/-(.*)/s)[1]);
+    keys.delete("");
+    lines.push({ row: i + 1, mpn: clean(get("mpn")), mouser: clean(get("mouser")), ref: clean(get("ref")),
+                 qty: clean(get("qty")), value: clean(get("value")), keys: [...keys], spec: sp,
+                 found: false, bagQty: "", match: "", scanned: "" });
+  }
+  const colNames = Object.fromEntries(Object.entries(cols).filter(([, v]) => v != null).map(([k, v]) => [k, header[v]]));
+  return { lines, cols: colNames };
+}
+
+function parseCSV(text) {
+  text = text.replace(/^\uFEFF/, "");
+  const first = text.split(/\r?\n/).find(l => l.trim()) || "";
+  const d = [",", ";", "\t"].reduce((a, b) => first.split(b).length > first.split(a).length ? b : a);
+  const rows = []; let row = [], f = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true;
+    else if (c === d) { row.push(f.trim()); f = ""; }
+    else if (c === "\n") { row.push(f.trim()); rows.push(row); row = []; f = ""; }
+    else if (c !== "\r") f += c;
+  }
+  if (f || row.length) { row.push(f.trim()); rows.push(row); }
+  return rows;
+}
+
+// ---- barcode
+function parseEcia(raw) {
+  let t = raw;
+  for (const [a, b] of [["<GS>", GS], ["{GS}", GS], ["<RS>", RS], ["{RS}", RS], ["<EOT>", EOT], ["{EOT}", EOT]]) t = t.split(a).join(b);
+  if (!t.startsWith("[)>")) return null;
+  const fields = {};
+  for (const part of t.slice(3).split(/[\x1d\x1e\x04]/)) {
+    const m = /^(\d{0,3}[A-Z])(.+)$/.exec(part.trim());
+    if (m && !(m[1] in fields)) fields[m[1]] = m[2].trim();
+  }
+  return fields;
+}
+function candidates(raw) {
+  const f = parseEcia(raw);
+  if (f) return [["1P", "P", "30P"].filter(k => f[k]).map(k => f[k]), f.Q || "", true];
+  return [[raw.trim()], "", false];
+}
+function findMatches(lines, cands) {
+  const cs = new Set();
+  for (const c of cands) {
+    const n = norm(c);
+    if (!n) continue;
+    cs.add(n);
+    if (MOUSER_PREFIX.test(n)) cs.add(n.split(/-(.*)/s)[1]);
+  }
+  return lines.filter(ln => ln.keys.some(k => cs.has(k)));
+}
+function evaluate(lines, raws, useValue = true) {
+  const res = { type: null, hits: [], qty: "", parts: [], notes: [], status: "", scanned: "", spec: null };
+  const specs = [];
+  for (const raw of raws) {
+    const [cands, q, isEcia] = candidates(raw);
+    res.qty ||= q;
+    if (isEcia) res.parts.push(...cands);
+    for (const ln of findMatches(lines, cands)) if (!res.hits.includes(ln)) res.hits.push(ln);
+    for (const c of cands) { const sp = decodeMpn(c); if (sp) specs.push([c, sp]); }
+  }
+  if (res.hits.length) { res.type = "exact"; return res; }
+  if (useValue) {
+    const good = [], bad = [];
+    for (const [mpn, sp] of specs) for (const ln of lines) {
+      const r = compare(sp, ln.spec);
+      if (r) (r[0] === "reject" ? bad : good).push([ln, r[0], r[1], mpn, sp]);
+    }
+    const chosen = good.length ? good : bad;
+    if (chosen.length) {
+      res.type = good.length ? "value" : "reject";
+      res.status = chosen.some(c => c[1] === "warn") ? "warn" : chosen[0][1];
+      for (const [ln, , notes, mpn, sp] of chosen) {
+        if (!res.hits.includes(ln)) res.hits.push(ln);
+        for (const n of notes) if (!res.notes.includes(n)) res.notes.push(n);
+        res.scanned = mpn; res.spec = sp;
+      }
+      return res;
+    }
+  }
+  if (res.parts.length) { res.type = "miss"; res.spec = specs.length ? specs[0][1] : null; }
+  return res;
+}
+// Εφαρμόζει το αποτέλεσμα στις γραμμές και επιστρέφει τι δείχνει η μπάρα.
+function applyResult(res) {
+  const { type, hits, qty } = res;
+  const refs = hits.map(ln => ln.ref || `γραμμή ${ln.row}`).join(", ");
+  const bomq = hits.map(ln => ln.qty).filter(Boolean).join("+") || "?";
+  const again = hits.length && hits.every(ln => ln.found);
+  if (type === "exact" || type === "value") for (const ln of hits) {
+    ln.found = true; ln.match = type === "exact" ? "MPN" : "VALUE";
+    ln.scanned = type === "value" ? res.scanned : "";
+    if (qty) ln.bagQty = qty;
+  }
+  const qtys = `BOM: ${bomq} τεμ. · σακουλάκι: ${qty || "?"}`;
+  const pre = again ? "Ξανά: " : "";
+  if (type === "exact")
+    return { cls: "keep", sound: "keep", verdict: pre + "Κράτα το", refs, detail: `${hits[0].mpn || hits[0].mouser} · ${qtys}` };
+  if (type === "value") {
+    const warn = res.status === "warn";
+    return { cls: warn ? "check" : "same", sound: "same",
+             verdict: pre + (warn ? "Ίδια τιμή, έλεγξέ το" : "Ίδια τιμή, κράτα το"), refs,
+             detail: `${fmtValue(res.spec)} · ${res.scanned} · ${qtys}` + (res.notes.length ? ` · ${res.notes.join("; ")}` : "") };
+  }
+  if (type === "reject")
+    return { cls: "nope", sound: "nope", verdict: "Ίδια τιμή, αλλά δεν κάνει", refs,
+             detail: `${res.notes.join("; ")} · ${res.scanned}` };
+  return { cls: "nope", sound: "nope", verdict: "Δεν χρειάζεται", refs: "",
+           detail: (res.parts[0] || "?") + (res.spec ? ` · ${fmtValue(res.spec)}` : "") };
+}
+// LOGIC-END
+
+// ---------------------------------------------------------------- UI
+const $ = id => document.getElementById(id);
+const STORE = "mouser-bom-scanner-v1";
+let state = null;             // { name, lines, cols }
+let stream = null, running = false, busy = false;
+let audio = null, seen = new Map(), stripUntil = 0;
+const work = document.createElement("canvas");
+const wctx = work.getContext("2d", { willReadFrequently: true });
+
+function save() { try { localStorage.setItem(STORE, JSON.stringify(state)); } catch {} }
+function restore() { try { const s = JSON.parse(localStorage.getItem(STORE)); if (s && s.lines) state = s; } catch {} }
+
+function render() {
+  if (!state) return;
+  $("bomInfo").textContent = `${state.name}: ${state.lines.length} γραμμές.`;
+  $("bomBtn").textContent = "Αλλαγή BOM";
+  $("bomBtn").classList.add("ghost");
+  $("scanner").hidden = false; $("listSheet").hidden = false;
+  const found = state.lines.filter(l => l.found).length;
+  $("count").innerHTML = `<b>${found}</b> / ${state.lines.length}`;
+  const only = $("onlyMissing").checked;
+  const ul = $("parts"); ul.textContent = "";
+  state.lines.forEach((ln, i) => {
+    if (only && ln.found) return;
+    const li = document.createElement("li");
+    li.dataset.i = i;
+    if (ln.found) li.className = `done f-${ln.match || "MANUAL"}`;
+    const sub = [ln.value, ln.mpn || ln.mouser, ln.spec ? fmtValue(ln.spec) : "",
+                 ln.match === "VALUE" ? `σκαναρίστηκε: ${ln.scanned}` : ""].filter(Boolean).join(" · ");
+    li.innerHTML = `<span class="dot"></span><div><div class="p-refs refs"></div><div class="p-sub"></div></div><div class="p-qty"></div>`;
+    li.querySelector(".p-refs").textContent = ln.ref || `Γραμμή ${ln.row}`;
+    li.querySelector(".p-sub").textContent = sub;
+    li.querySelector(".p-qty").textContent = ln.qty ? `×${ln.qty}` : "";
+    ul.appendChild(li);
+  });
+}
+
+$("parts").addEventListener("click", e => {
+  const li = e.target.closest("li"); if (!li) return;
+  const ln = state.lines[+li.dataset.i];
+  ln.found = !ln.found; ln.match = ln.found ? "MANUAL" : ""; ln.scanned = "";
+  save(); render();
+});
+$("onlyMissing").addEventListener("change", render);
+
+$("bomFile").addEventListener("change", async e => {
+  const file = e.target.files[0]; if (!file) return;
+  $("bomErr").hidden = true;
+  try {
+    let rows;
+    if (/\.(csv|tsv|txt)$/i.test(file.name)) rows = parseCSV(await file.text());
+    else {
+      if (!window.XLSX) throw new Error("Δεν φόρτωσε ο αναγνώστης Excel. Έλεγξε τη σύνδεση στο internet ή χρησιμοποίησε .csv.");
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: true, blankrows: true });
+    }
+    const { lines, cols } = loadBom(rows);
+    if (!lines.length) throw new Error("Το BOM δεν έχει γραμμές με MPN ή τιμή.");
+    state = { name: file.name, lines, cols };
+    seen.clear(); save(); render();
+  } catch (err) {
+    $("bomErr").textContent = err.message; $("bomErr").hidden = false;
+  }
+  e.target.value = "";
+});
+
+$("resetBtn").addEventListener("click", () => {
+  if (!confirm("Να μηδενιστεί η πρόοδος για αυτό το BOM;")) return;
+  for (const ln of state.lines) Object.assign(ln, { found: false, bagQty: "", match: "", scanned: "" });
+  seen.clear(); save(); render();
+});
+
+$("dlBtn").addEventListener("click", () => {
+  const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const head = ["BOM row", "Reference", "MPN", "Mouser #", "Value", "BOM qty", "Found", "Match", "Scanned MPN", "Bag qty"];
+  const rows = state.lines.map(l => [l.row, l.ref, l.mpn, l.mouser, l.value, l.qty, l.found ? "YES" : "", l.match, l.scanned, l.bagQty]);
+  const csv = "\uFEFF" + [head, ...rows].map(r => r.map(esc).join(",")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = state.name.replace(/\.[^.]+$/, "") + "_scan_report.csv";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+});
+
+function setStrip(cls, verdict, refs, detail, flash) {
+  const s = $("strip");
+  s.className = "strip " + (cls || "");
+  $("sVerdict").textContent = verdict; $("sRefs").textContent = refs || ""; $("sDetail").textContent = detail || "";
+  if (flash) { void s.offsetWidth; s.classList.add("flash"); }
+}
+const idle = () => setStrip("", "Σκάναρε ετικέτα", "", "Δείξε το τετράγωνο barcode της ετικέτας στην κάμερα.");
+
+function beep(kind) {
+  if (navigator.vibrate) navigator.vibrate(kind === "nope" ? [250] : kind === "same" ? [60, 60, 60] : [80]);
+  if (!audio) return;
+  const tone = (f, t0, d) => {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = f; o.connect(g); g.connect(audio.destination);
+    g.gain.setValueAtTime(0.25, audio.currentTime + t0);
+    g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + t0 + d);
+    o.start(audio.currentTime + t0); o.stop(audio.currentTime + t0 + d);
+  };
+  if (kind === "keep") tone(1600, 0, 0.15);
+  else if (kind === "same") { tone(1100, 0, 0.1); tone(1100, 0.16, 0.1); }
+  else tone(400, 0, 0.35);
+}
+
+async function startCamera(deviceId) {
+  stopCamera();
+  const size = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const video = deviceId ? { deviceId: { exact: deviceId }, ...size } : { facingMode: { ideal: "environment" }, ...size };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+  } catch (err) {
+    const why = !window.isSecureContext ? "Η σελίδα πρέπει να ανοίγει με https:// για να δοθεί πρόσβαση στην κάμερα."
+      : err.name === "NotAllowedError" ? "Δεν δόθηκε άδεια για την κάμερα. Επίτρεψέ την από τις ρυθμίσεις του browser."
+      : `Η κάμερα δεν άνοιξε (${err.name}).`;
+    setStrip("nope", "Η κάμερα δεν άνοιξε", "", why); return;
+  }
+  const v = $("video"); v.srcObject = stream; await v.play().catch(() => {});
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+  const cur = stream.getVideoTracks()[0]?.getSettings().deviceId;
+  const sel = $("camSel"); sel.textContent = "";
+  devs.forEach((d, i) => { const o = new Option(d.label || `Κάμερα ${i + 1}`, d.deviceId); o.selected = d.deviceId === cur; sel.add(o); });
+  sel.hidden = devs.length < 2;
+  $("camBtn").textContent = "Κλείσιμο κάμερας";
+  running = true; idle(); loop();
+}
+function stopCamera() {
+  running = false;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; $("video").srcObject = null;
+  $("camBtn").textContent = "Άνοιγμα κάμερας";
+  const o = $("overlay"); o.getContext("2d").clearRect(0, 0, o.width, o.height);
+}
+
+$("camBtn").addEventListener("click", () => {
+  if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch {} }
+  audio?.resume?.();
+  if (running) { stopCamera(); setStrip("", "Η κάμερα είναι κλειστή", "", "Πάτα «Άνοιγμα κάμερας» για να συνεχίσεις."); }
+  else startCamera();
+});
+$("camSel").addEventListener("change", e => startCamera(e.target.value));
+document.addEventListener("visibilitychange", () => { if (document.hidden && running) { stopCamera(); setStrip("", "Η κάμερα είναι κλειστή", "", "Πάτα «Άνοιγμα κάμερας» για να συνεχίσεις."); } });
+
+function loop() {
+  if (!running) return;
+  if (!busy && $("video").readyState >= 2) {
+    busy = true;
+    scanFrame().catch(err => console.error(err)).finally(() => { busy = false; });
+  }
+  if (stripUntil && performance.now() > stripUntil) { stripUntil = 0; idle(); }
+  setTimeout(loop, 120);
+}
+
+async function scanFrame() {
+  const read = window.ZXingWASM && (ZXingWASM.readBarcodes || ZXingWASM.readBarcodesFromImageData);
+  if (!read) { setStrip("nope", "Ο αναγνώστης barcode δεν φόρτωσε", "", "Έλεγξε τη σύνδεση στο internet και ξαναφόρτωσε τη σελίδα."); running = false; return; }
+  const v = $("video"), vw = v.videoWidth, vh = v.videoHeight;
+  if (!vw) return;
+  const k = Math.min(1, 1600 / vw), w = Math.round(vw * k), h = Math.round(vh * k);
+  if (work.width !== w) { work.width = w; work.height = h; }
+  wctx.drawImage(v, 0, 0, w, h);
+  const results = await read(wctx.getImageData(0, 0, w, h), {
+    formats: ["DataMatrix", "Code128", "Code39", "QRCode"], tryHarder: true, maxNumberOfSymbols: 8, textMode: "Plain",
+  });
+  drawBoxes(results, w);
+  const raws = results.filter(r => r.isValid !== false && r.text).map(r => r.text);
+  if (!raws.length || !state) return;
+  const res = evaluate(state.lines, raws, $("valueMode").checked);
+  if (!res.type) return;
+  const now = performance.now();
+  const ids = res.hits.length ? res.hits.map(l => l.row) : [...res.parts].sort();
+  const key = [res.type, ...ids].join("|");
+  const good = res.type === "exact" || res.type === "value";
+  if (now - (seen.get(key) ?? -1e9) > 5000) {
+    const out = applyResult(res);
+    setStrip(out.cls, out.verdict, out.refs, out.detail, true);
+    beep(out.sound);
+    stripUntil = now + 4000;
+    if (good) { save(); render(); }
+  } else if (good && res.qty) {
+    for (const ln of res.hits) ln.bagQty = res.qty;
+    save();
+  }
+  if (good) stripUntil = Math.max(stripUntil, now + 1500);
+  seen.set(key, now);
+}
+
+function drawBoxes(results, workWidth) {
+  const v = $("video"), o = $("overlay");
+  if (o.width !== v.clientWidth || o.height !== v.clientHeight) { o.width = v.clientWidth; o.height = v.clientHeight; }
+  const c = o.getContext("2d"); c.clearRect(0, 0, o.width, o.height);
+  const f = v.clientWidth / workWidth;
+  c.lineWidth = 4; c.strokeStyle = "#f08a24";
+  for (const r of results) {
+    const p = r.position; if (!p) continue;
+    const pts = [p.topLeft, p.topRight, p.bottomRight, p.bottomLeft];
+    c.beginPath(); pts.forEach((q, i) => c[i ? "lineTo" : "moveTo"](q.x * f, q.y * f)); c.closePath(); c.stroke();
+  }
+}
+
+// overlay sits over the video, which is below the strip
+new ResizeObserver(() => { const v = $("video"), o = $("overlay"); o.style.top = v.offsetTop + "px"; }).observe($("video"));
+
+restore(); render();
+</script>
+</body>
+</html>
